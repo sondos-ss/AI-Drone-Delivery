@@ -3,6 +3,7 @@ from panda3d.core import *
 from direct.task import Task
 from direct.gui.OnscreenText import OnscreenText
 import random
+import heapq
 import math
 import sys
 from algos import a_star, bfs, dfs, ucs, gbfs, bidirectional
@@ -19,8 +20,9 @@ CELL_SIZE = 1
 NUM_PACKAGES = 5
 FLY_HEIGHT = 3.0
 GROUND_HEIGHT = 0.5
-DRONE_SPEED = 10.0
+DRONE_SPEED = 8.0
 BATTERY_CAPACITY = 100.0
+NUM_DRONES = 3  # Number of drones to simulate
 
 class DroneDeliverySim(ShowBase):
     def __init__(self):
@@ -30,21 +32,21 @@ class DroneDeliverySim(ShowBase):
         # Game state
         self.grid = [[0 for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
         self.buildings = set()
-        self.building_obstacles = set()
         self.packages = []
+        self.drones = []  # List to store all drones
+        self.score = 0
+        self.delivered_count = 0
+        self.building_obstacles = set()
         self.current_path = []
         self.current_package = None
         self.path_index = 0
         self.battery = BATTERY_CAPACITY
-        self.score = 0
-        self.delivered_count = 0
         self.rotor_angle = 0
 
         # Setup
         self.setup_world()
         self.setup_ui()
         self.taskMgr.add(self.update, "update")
-        self.taskMgr.add(self.update_battery, "update_battery")
 
     def setup_world(self):
         """Initialize the 3D world environment"""
@@ -68,6 +70,7 @@ class DroneDeliverySim(ShowBase):
             (0.5, 0.6, 0.6, 1)    # Blue-gray
         ]
         
+        # Generate buildings
         for x in range(0, GRID_SIZE, 3):
             for y in range(0, GRID_SIZE, 3):
                 if random.random() < 0.5:  # 50% chance of building
@@ -97,15 +100,27 @@ class DroneDeliverySim(ShowBase):
                             )
                             window.reparentTo(building)
 
-        # Packages and delivery points
-        for _ in range(NUM_PACKAGES):
-            while True:
-                sx, sy = random.randint(0, GRID_SIZE - 1), random.randint(0, GRID_SIZE - 1)
-                gx, gy = random.randint(0, GRID_SIZE - 1), random.randint(0, GRID_SIZE - 1)
-                if (sx, sy) not in self.buildings and (gx, gy) not in self.buildings and (sx, sy) != (gx, gy):
-                    break
+        # Generate all valid non-building positions
+        valid_positions = []
+        for x in range(GRID_SIZE):
+            for y in range(GRID_SIZE):
+                if (x, y) not in self.buildings:
+                    valid_positions.append((x, y))
+        
+        # Ensure we have enough positions for all packages
+        if len(valid_positions) < NUM_PACKAGES * 2:
+            print("Error: Not enough valid positions for packages!")
+            return
+
+        # Shuffle and create package pairs
+        random.shuffle(valid_positions)
+        
+        # Create packages with connected source-destination pairs
+        for i in range(NUM_PACKAGES):
+            start_pos = valid_positions[i*2]
+            end_pos = valid_positions[i*2 + 1]
             
-            # Package model
+            # Create pickup point
             pickup = self.loader.loadModel("models/box")
             pickup.setScale(0.4, 0.4, 0.2)
             pickup.setColor(random.choice([
@@ -113,51 +128,72 @@ class DroneDeliverySim(ShowBase):
                 (1, 0.2, 0.2, 1),   # Red
                 (0.8, 0.8, 0, 1)    # Yellow
             ]))
-            pickup.setPos(sx + 0.5, sy + 0.5, 0.2)
+            pickup.setPos(start_pos[0] + 0.5, start_pos[1] + 0.5, 0.2)
             pickup.reparentTo(self.render)
 
-            # Delivery point
+            # Create delivery point
             goal = self.loader.loadModel("models/box")
             goal.setScale(0.6, 0.6, 0.1)
             goal.setColor(0.2, 1, 0.2, 1)
-            goal.setPos(gx + 0.5, gy + 0.5, 0.1)
+            goal.setPos(end_pos[0] + 0.5, end_pos[1] + 0.5, 0.1)
             goal.reparentTo(self.render)
 
             # Add marker pole
             pole = self.loader.loadModel("models/box")
             pole.setScale(0.1, 0.1, 1.0)
             pole.setColor(0.8, 0.8, 0.8, 1)
-            pole.setPos(gx + 0.5, gy + 0.5, 0.5)
+            pole.setPos(end_pos[0] + 0.5, end_pos[1] + 0.5, 0.5)
             pole.reparentTo(self.render)
 
             self.packages.append({
-                'start': (sx, sy),
-                'goal': (gx, gy),
+                'start': start_pos,
+                'goal': end_pos,
                 'pickup_model': pickup,
                 'goal_model': goal,
                 'pole_model': pole,
                 'picked': False,
-                'delivered': False
+                'delivered': False,
+                'assigned_to': None  # Track which drone is assigned to this package
             })
 
-        # Drone model with rotors
-        self.drone = self.loader.loadModel("models/box")
-        self.drone.setScale(0.5, 0.5, 0.2)
-        self.drone.setColor(1, 0.3, 0.3, 1)
-        self.drone.setPos(0, 0, FLY_HEIGHT)
-        self.drone.reparentTo(self.render)
+        # Create multiple drones
+        drone_colors = [
+            (1, 0.3, 0.3, 1),  # Red
+            (0.3, 1, 0.3, 1),  # Green
+            (0.3, 0.3, 1, 1)   # Blue
+        ]
         
-        # Add rotors (4 small boxes)
-        self.rotors = []
-        for i, (x, y) in enumerate([(0.3, 0.3), (0.3, -0.3), (-0.3, 0.3), (-0.3, -0.3)]):
-            rotor = self.loader.loadModel("models/box")
-            rotor.setScale(0.15, 0.15, 0.05)
-            rotor.setColor(0.2, 0.2, 0.2, 1)
-            rotor.setPos(x, y, 0.15)
-            rotor.reparentTo(self.drone)
-            self.rotors.append(rotor)
+        for i in range(NUM_DRONES):
+            drone = {
+                'model': self.loader.loadModel("models/box"),
+                'rotors': [],
+                'current_path': [],
+                'current_package': None,
+                'path_index': 0,
+                'battery': BATTERY_CAPACITY,
+                'rotor_angle': 0,
+                'id': i
+            }
+            
+            drone['model'].setScale(0.5, 0.5, 0.2)
+            drone['model'].setColor(drone_colors[i % len(drone_colors)])
+            # Start drones at different positions
+            drone['model'].setPos(i * 2, 0, FLY_HEIGHT)
+            drone['model'].reparentTo(self.render)
+            
+            # Add rotors
+            for x, y in [(0.3, 0.3), (0.3, -0.3), (-0.3, 0.3), (-0.3, -0.3)]:
+                rotor = self.loader.loadModel("models/box")
+                rotor.setScale(0.15, 0.15, 0.05)
+                rotor.setColor(0.2, 0.2, 0.2, 1)
+                rotor.setPos(x, y, 0.15)
+                rotor.reparentTo(drone['model'])
+                drone['rotors'].append(rotor)
+            
+            self.drones.append(drone)
+            self.taskMgr.add(lambda task, i=i: self.update_battery(task, i), f"update_battery_{i}")
 
-        # Camera setup
+        # Camera setup (now follows first drone)
         self.camera.setPos(GRID_SIZE / 2, -GRID_SIZE * 1.2, GRID_SIZE * 0.8)
         self.camera.lookAt(GRID_SIZE / 2, GRID_SIZE / 2, 0)
 
@@ -174,15 +210,18 @@ class DroneDeliverySim(ShowBase):
 
     def setup_ui(self):
         """Initialize the user interface elements"""
-        # Battery display
-        self.battery_text = OnscreenText(
-            text=f"Battery: {int(self.battery)}%",
-            pos=(-1.3, 0.9),
-            scale=0.07,
-            fg=(1, 1, 1, 1),
-            align=TextNode.ALeft,
-            mayChange=True
-        )
+        # Battery displays (one for each drone)
+        self.battery_texts = []
+        for i in range(NUM_DRONES):
+            text = OnscreenText(
+                text=f"Drone {i+1}: {BATTERY_CAPACITY}%",
+                pos=(-1.3, 0.9 - i * 0.08),
+                scale=0.07,
+                fg=(1, 1, 1, 1),
+                align=TextNode.ALeft,
+                mayChange=True
+            )
+            self.battery_texts.append(text)
         
         # Score display
         self.score_text = OnscreenText(
@@ -208,164 +247,178 @@ class DroneDeliverySim(ShowBase):
         """Main game update loop"""
         dt = globalClock.getDt()
 
-        # Rotate rotors
-        self.rotate_rotors(dt)
+        # Update each drone
+        for drone in self.drones:
+            # Rotate rotors
+            self.rotate_rotors(drone, dt)
 
-        # Find new target if needed
-        if not self.current_path and self.current_package is None:
-            self.find_next_package()
+            # Find new target if needed
+            if not drone['current_path'] and drone['current_package'] is None:
+                self.find_next_package(drone)
 
-        # Follow current path
-        if self.current_path and self.path_index < len(self.current_path):
-            self.follow_path(dt)
-        elif self.current_package:
-            self.handle_package()
+            # Follow current path
+            if drone['current_path'] and drone['path_index'] < len(drone['current_path']):
+                self.follow_path(drone, dt)
+            elif drone['current_package']:
+                self.handle_package(drone)
 
-        # Update camera to follow drone
-        self.update_camera()
+        # Update camera to follow first drone
+       # self.update_camera()
 
         return Task.cont
 
-    def rotate_rotors(self, dt):
+    def rotate_rotors(self, drone, dt):
         """Animate the drone rotors"""
-        self.rotor_angle = (self.rotor_angle + 500 * dt) % 360
-        for rotor in self.rotors:
-            rotor.setH(self.rotor_angle)
+        drone['rotor_angle'] = (drone['rotor_angle'] + 500 * dt) % 360
+        for rotor in drone['rotors']:
+            rotor.setH(drone['rotor_angle'])
 
-    def find_next_package(self):
-        """Find the next package to pick up or deliver"""
+    def find_next_package(self, drone):
+        """Find the next package to pick up or deliver for this drone"""
+        # First check if this drone has a package that needs delivering
         for pkg in self.packages:
-            if not pkg['picked']:
-                # Find path to package
-                self.current_package = pkg
-                self.current_path = self.path_gen(algo, self.get_grid_pos(), pkg['start'], heur)
-                # self.current_path = self.a_star(self.get_grid_pos(), pkg['start'])
-                self.path_index = 0
-                if not self.current_path:
-                    print("No path to package found!")
-                    self.current_package = None
-                    self.current_path = []
-                    exit -1
-            elif pkg['picked'] and not pkg['delivered']:
+            if pkg['picked'] and not pkg['delivered'] and pkg['assigned_to'] == drone['id']:
                 # Find path to delivery point
-                self.current_package = pkg
-                self.current_path = self.path_gen(algo, self.get_grid_pos(), pkg['goal'], heur)
-                # self.current_path = self.a_star(self.get_grid_pos(), pkg['goal'])
-                self.path_index = 0
-                if not self.current_path:
-                    print("No path to delivery point found!")
-                    self.current_package = None
-                    self.current_path = []
-                    exit -1
+                drone['current_package'] = pkg
+                drone['current_path'] = self.path_gen(algo, self.get_grid_pos(), pkg['start'], heur)
+                drone['path_index'] = 0
+                if not drone['current_path']:
+                    print(f"Drone {drone['id']}: No path to delivery point found!")
+                    drone['current_package'] = None
+                    drone['current_path'] = []
+                return
 
-    def follow_path(self, dt):
+        # Find the nearest unassigned package
+        unassigned_pkgs = [pkg for pkg in self.packages if not pkg['picked'] and pkg['assigned_to'] is None]
+        if not unassigned_pkgs:
+            return
+
+        # Calculate distances from drone to each package
+        drone_pos = self.get_grid_pos(drone)
+        distances = []
+        for pkg in unassigned_pkgs:
+            dist = abs(drone_pos[0] - pkg['start'][0]) + abs(drone_pos[1] - pkg['start'][1])
+            distances.append((dist, pkg))
+
+        # Sort by distance and find the closest package that isn't assigned to another drone
+        distances.sort()
+        for dist, pkg in distances:
+            if pkg['assigned_to'] is None:
+                # Assign this package to current drone
+                pkg['assigned_to'] = drone['id']
+                drone['current_package'] = pkg
+                drone['current_path'] = self.current_path = self.path_gen(algo, self.get_grid_pos(), pkg['goal'], heur)
+                drone['path_index'] = 0
+                if not drone['current_path']:
+                    print(f"Drone {drone['id']}: No path to package found!")
+                    drone['current_package'] = None
+                    drone['current_path'] = []
+                    pkg['assigned_to'] = None
+                break
+
+    def follow_path(self, drone, dt):
         """Move the drone along the current path"""
-        tx, ty = self.current_path[self.path_index]
-        is_target = (self.path_index == len(self.current_path) - 1)
+        tx, ty = drone['current_path'][drone['path_index']]
+        is_target = (drone['path_index'] == len(drone['current_path']) - 1)
         target_z = GROUND_HEIGHT if is_target else FLY_HEIGHT
         target_pos = LPoint3f(tx + 0.5, ty + 0.5, target_z)
         
-        current_pos = self.drone.getPos()
+        current_pos = drone['model'].getPos()
         direction = target_pos - current_pos
         distance = direction.length()
         
         if distance > 0.1:
             direction.normalize()
             move_dist = min(DRONE_SPEED * dt, distance)
-            self.drone.setPos(current_pos + direction * move_dist)
+            drone['model'].setPos(current_pos + direction * move_dist)
             
             # Smooth rotation toward movement direction
             target_hpr = Vec3(math.degrees(math.atan2(-direction.getX(), direction.getY())), 0, 0)
-            current_hpr = self.drone.getHpr()
+            current_hpr = drone['model'].getHpr()
             new_hpr = current_hpr + (target_hpr - current_hpr) * 5 * dt
-            self.drone.setHpr(new_hpr)
+            drone['model'].setHpr(new_hpr)
         else:
-            self.path_index += 1
+            drone['path_index'] += 1
 
-    def handle_package(self):
-        """Handle package pickup or delivery"""
-        drone_pos = self.get_grid_pos()
-        pkg = self.current_package
+    def handle_package(self, drone):
+        """Handle package pickup or delivery for this drone"""
+        drone_pos = self.get_grid_pos(drone)
+        pkg = drone['current_package']
 
         if not pkg['picked'] and drone_pos == pkg['start']:
             # Pick up package
             pkg['picked'] = True
             pkg['pickup_model'].removeNode()
-            print("📦 Package picked up!")
+            print(f"Drone {drone['id']}: 📦 Package picked up!")
             self.score += 10
             self.score_text.setText(f"Score: {self.score}")
             
             # Find path to delivery point
-            self.current_path = self.path_gen(algo, drone_pos, pkg['goal'], heur)
-            # self.current_path = self.a_star(drone_pos, pkg['goal'])
-            self.path_index = 0
-            if not self.current_path:
-                print("No path to delivery point!")
-                self.current_package = None
-                self.current_path = []
+            drone['current_path'] = self.path_gen(algo, drone_pos, pkg['goal'], heur)
+            drone['path_index'] = 0
+            if not drone['current_path']:
+                print(f"Drone {drone['id']}: No path to delivery point!")
+                drone['current_package'] = None
+                drone['current_path'] = []
 
         elif pkg['picked'] and not pkg['delivered'] and drone_pos == pkg['goal']:
             # Deliver package
             pkg['delivered'] = True
             pkg['goal_model'].removeNode()
             pkg['pole_model'].removeNode()
-            print("✅ Package delivered!")
+            print(f"Drone {drone['id']}: ✅ Package delivered!")
             self.score += 50
             self.delivered_count += 1
-            self.battery = min(BATTERY_CAPACITY, self.battery + 10)
+            drone['battery'] = min(BATTERY_CAPACITY, drone['battery'] + 10)
             
             # Update UI
             self.score_text.setText(f"Score: {self.score}")
             self.delivered_text.setText(f"Delivered: {self.delivered_count}/{NUM_PACKAGES}")
             
             # Clear current package and path
-            self.current_package = None
-            self.current_path = []
+            drone['current_package'] = None
+            drone['current_path'] = []
+            pkg['assigned_to'] = None
             
             # Check if all packages delivered
             if self.delivered_count == NUM_PACKAGES:
                 print("🎉 All packages delivered! Mission complete!")
             else:
                 # Immediately look for next package
-                self.find_next_package()
+                self.find_next_package(drone)
 
-    def update_battery(self, task):
-        """Update battery level and check for depletion"""
-        self.battery -= 0.03  # Battery drain rate
-        if self.battery <= 0:
-            print("⚠️ Battery depleted! Mission failed.")
-            self.battery = 0
-            self.taskMgr.remove("update")  # Stop the simulation
-        
+    def update_battery(self, task, drone_id):
+        """Update battery level for a specific drone"""
+        drone = self.drones[drone_id]
+    
+        # Only decrease battery if there are still packages to deliver
+        if self.delivered_count < NUM_PACKAGES:
+            drone['battery'] -= 0.03  # Battery drain rate
+            if drone['battery'] <= 0:
+                print(f"⚠️ Drone {drone_id} battery depleted!")
+                drone['battery'] = 0
+                # Remove this drone from active duty
+                if drone['current_package']:
+                    drone['current_package']['assigned_to'] = None
+                drone['current_package'] = None
+                drone['current_path'] = []
+    
         # Update battery display
-        self.battery_text.setText(f"Battery: {int(self.battery)}%")
-        
+        self.battery_texts[drone_id].setText(f"Drone {drone_id+1}: {int(drone['battery'])}%")
+    
         # Change color when battery is low
-        if self.battery < 20:
-            self.battery_text.setColor(1, 0, 0, 1)  # Red
+        if drone['battery'] < 20:
+            self.battery_texts[drone_id].setColor(1, 0, 0, 1)
         else:
-            self.battery_text.setColor(1, 1, 1, 1)  # White
-        
+            self.battery_texts[drone_id].setColor(1, 1, 1, 1)
+    
         return Task.cont
 
-    def update_camera(self):
-        """Update camera position to follow drone"""
-        drone_pos = self.drone.getPos()
-        target_pos = LPoint3f(
-            drone_pos.getX(),
-            drone_pos.getY() - 15,
-            drone_pos.getZ() + 10
-        )
-        current_pos = self.camera.getPos()
-        self.camera.setPos(current_pos + (target_pos - current_pos) * 0.05)
-        self.camera.lookAt(drone_pos)
-
-    def get_grid_pos(self):
+    def get_grid_pos(self, drone):
         """Get drone's grid position (x,y)"""
-        pos = self.drone.getPos()
+        pos = drone['model'].getPos()
         return (int(pos.getX()), int(pos.getY()))
-
-    # path_gen(sys.argv[2], drone_pos, pkg['goal'], sys.argv[3])
+      
     def path_gen(self, algo, start, goal, heur):
         if algo == 'a_star':
             return a_star(start, goal, heur, GRID_SIZE, self.buildings)
@@ -381,6 +434,42 @@ class DroneDeliverySim(ShowBase):
             return bidirectional(start, goal, GRID_SIZE, self.buildings)
         return algo(start, goal, heur)
 
+    def a_star(self, start, goal):
+        """A* pathfinding algorithm"""
+        def heuristic(a, b):
+            return abs(a[0]-b[0]) + abs(a[1]-b[1])
+
+        open_set = []
+        heapq.heappush(open_set, (0 + heuristic(start, goal), 0, start, []))
+        visited = set()
+
+        while open_set:
+            est_total, cost, current, path = heapq.heappop(open_set)
+            
+            if current in visited:
+                continue
+                
+            visited.add(current)
+            
+            if current == goal:
+                return path + [current]
+
+            for dx, dy in [(-1,0),(1,0),(0,-1),(0,1), (-1,-1),(-1,1),(1,-1),(1,1)]:
+                nx, ny = current[0]+dx, current[1]+dy
+                
+                if (0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE and 
+                    (nx, ny) not in self.buildings):
+                    
+                    move_cost = 1.4 if dx != 0 and dy != 0 else 1.0
+                    heapq.heappush(
+                        open_set, 
+                        (cost + move_cost + heuristic((nx, ny), goal), 
+                         cost + move_cost, 
+                         (nx, ny), 
+                         path + [current])
+                    )
+
+        return []  # No path found
 
 app = DroneDeliverySim()
 app.run()
