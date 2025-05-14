@@ -5,6 +5,14 @@ from direct.gui.OnscreenText import OnscreenText
 import random
 import heapq
 import math
+import sys
+from algos import a_star, bfs, dfs, ucs, gbfs, bidirectional
+
+drones = sys.argv[1] if len(sys.argv) > 1 else 1
+algo = sys.argv[2] if len(sys.argv) > 2 else 'a_star'
+heur = sys.argv[3] if len(sys.argv) > 3 else 'manhatten'
+
+# print(drones, algo, heur)
 
 # Constants
 GRID_SIZE = 30
@@ -28,6 +36,12 @@ class DroneDeliverySim(ShowBase):
         self.drones = []  # List to store all drones
         self.score = 0
         self.delivered_count = 0
+        self.building_obstacles = set()
+        self.current_path = []
+        self.current_package = None
+        self.path_index = 0
+        self.battery = BATTERY_CAPACITY
+        self.rotor_angle = 0
 
         # Setup
         self.setup_world()
@@ -67,6 +81,11 @@ class DroneDeliverySim(ShowBase):
                     building.setColor(random.choice(building_colors))
                     building.reparentTo(self.render)
                     self.buildings.add((x, y))
+                    for dx in range(-1, 1):
+                        for dy in range(-1, 1):
+                            nx, ny = x + dx, y + dy
+                            if 0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE:
+                                self.building_obstacles.add((nx, ny))
                     
                     # Add windows
                     if random.random() > 0.2:
@@ -261,7 +280,7 @@ class DroneDeliverySim(ShowBase):
             if pkg['picked'] and not pkg['delivered'] and pkg['assigned_to'] == drone['id']:
                 # Find path to delivery point
                 drone['current_package'] = pkg
-                drone['current_path'] = self.a_star(self.get_grid_pos(drone), pkg['goal'])
+                drone['current_path'] = self.path_gen(algo, self.get_grid_pos(), pkg['start'], heur)
                 drone['path_index'] = 0
                 if not drone['current_path']:
                     print(f"Drone {drone['id']}: No path to delivery point found!")
@@ -288,7 +307,7 @@ class DroneDeliverySim(ShowBase):
                 # Assign this package to current drone
                 pkg['assigned_to'] = drone['id']
                 drone['current_package'] = pkg
-                drone['current_path'] = self.a_star(drone_pos, pkg['start'])
+                drone['current_path'] = self.current_path = self.path_gen(algo, self.get_grid_pos(), pkg['goal'], heur)
                 drone['path_index'] = 0
                 if not drone['current_path']:
                     print(f"Drone {drone['id']}: No path to package found!")
@@ -335,7 +354,7 @@ class DroneDeliverySim(ShowBase):
             self.score_text.setText(f"Score: {self.score}")
             
             # Find path to delivery point
-            drone['current_path'] = self.a_star(drone_pos, pkg['goal'])
+            drone['current_path'] = self.path_gen(algo, drone_pos, pkg['goal'], heur)
             drone['path_index'] = 0
             if not drone['current_path']:
                 print(f"Drone {drone['id']}: No path to delivery point!")
@@ -399,6 +418,21 @@ class DroneDeliverySim(ShowBase):
         """Get drone's grid position (x,y)"""
         pos = drone['model'].getPos()
         return (int(pos.getX()), int(pos.getY()))
+      
+    def path_gen(self, algo, start, goal, heur):
+        if algo == 'a_star':
+            return a_star(start, goal, heur, GRID_SIZE, self.buildings)
+        elif algo == 'bfs':
+            return bfs(start, goal, GRID_SIZE, self.buildings)
+        elif algo == 'dfs':
+            return dfs(start, goal, GRID_SIZE, self.buildings)
+        elif algo == 'ucs':
+            return ucs(start, goal, GRID_SIZE, self.buildings)
+        elif algo == 'gbfs':
+            return gbfs(start, goal, heur, GRID_SIZE, self.buildings)
+        elif algo == 'bidirectional':
+            return bidirectional(start, goal, GRID_SIZE, self.buildings)
+        return algo(start, goal, heur)
 
     def a_star(self, start, goal):
         """A* pathfinding algorithm"""
