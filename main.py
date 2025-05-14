@@ -3,8 +3,15 @@ from panda3d.core import *
 from direct.task import Task
 from direct.gui.OnscreenText import OnscreenText
 import random
-import heapq
 import math
+import sys
+from algos import a_star, bfs, dfs, ucs, gbfs, bidirectional
+
+drones = sys.argv[1] if len(sys.argv) > 1 else 1
+algo = sys.argv[2] if len(sys.argv) > 2 else 'a_star'
+heur = sys.argv[3] if len(sys.argv) > 3 else 'manhatten'
+
+# print(drones, algo, heur)
 
 # Constants
 GRID_SIZE = 30
@@ -12,7 +19,7 @@ CELL_SIZE = 1
 NUM_PACKAGES = 5
 FLY_HEIGHT = 3.0
 GROUND_HEIGHT = 0.5
-DRONE_SPEED = 8.0
+DRONE_SPEED = 10.0
 BATTERY_CAPACITY = 100.0
 
 class DroneDeliverySim(ShowBase):
@@ -23,6 +30,7 @@ class DroneDeliverySim(ShowBase):
         # Game state
         self.grid = [[0 for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
         self.buildings = set()
+        self.building_obstacles = set()
         self.packages = []
         self.current_path = []
         self.current_package = None
@@ -70,6 +78,11 @@ class DroneDeliverySim(ShowBase):
                     building.setColor(random.choice(building_colors))
                     building.reparentTo(self.render)
                     self.buildings.add((x, y))
+                    for dx in range(-1, 1):
+                        for dy in range(-1, 1):
+                            nx, ny = x + dx, y + dy
+                            if 0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE:
+                                self.building_obstacles.add((nx, ny))
                     
                     # Add windows
                     if random.random() > 0.2:
@@ -225,23 +238,25 @@ class DroneDeliverySim(ShowBase):
             if not pkg['picked']:
                 # Find path to package
                 self.current_package = pkg
-                self.current_path = self.a_star(self.get_grid_pos(), pkg['start'])
+                self.current_path = self.path_gen(algo, self.get_grid_pos(), pkg['start'], heur)
+                # self.current_path = self.a_star(self.get_grid_pos(), pkg['start'])
                 self.path_index = 0
                 if not self.current_path:
                     print("No path to package found!")
                     self.current_package = None
                     self.current_path = []
-                break
+                    exit -1
             elif pkg['picked'] and not pkg['delivered']:
                 # Find path to delivery point
                 self.current_package = pkg
-                self.current_path = self.a_star(self.get_grid_pos(), pkg['goal'])
+                self.current_path = self.path_gen(algo, self.get_grid_pos(), pkg['goal'], heur)
+                # self.current_path = self.a_star(self.get_grid_pos(), pkg['goal'])
                 self.path_index = 0
                 if not self.current_path:
                     print("No path to delivery point found!")
                     self.current_package = None
                     self.current_path = []
-                break
+                    exit -1
 
     def follow_path(self, dt):
         """Move the drone along the current path"""
@@ -281,7 +296,8 @@ class DroneDeliverySim(ShowBase):
             self.score_text.setText(f"Score: {self.score}")
             
             # Find path to delivery point
-            self.current_path = self.a_star(drone_pos, pkg['goal'])
+            self.current_path = self.path_gen(algo, drone_pos, pkg['goal'], heur)
+            # self.current_path = self.a_star(drone_pos, pkg['goal'])
             self.path_index = 0
             if not self.current_path:
                 print("No path to delivery point!")
@@ -349,45 +365,22 @@ class DroneDeliverySim(ShowBase):
         pos = self.drone.getPos()
         return (int(pos.getX()), int(pos.getY()))
 
-    def a_star(self, start, goal):
-        """A* pathfinding algorithm"""
-        def heuristic(a, b):
-            return abs(a[0]-b[0]) + abs(a[1]-b[1])  # Manhattan distance
+    # path_gen(sys.argv[2], drone_pos, pkg['goal'], sys.argv[3])
+    def path_gen(self, algo, start, goal, heur):
+        if algo == 'a_star':
+            return a_star(start, goal, heur, GRID_SIZE, self.buildings)
+        elif algo == 'bfs':
+            return bfs(start, goal, GRID_SIZE, self.buildings)
+        elif algo == 'dfs':
+            return dfs(start, goal, GRID_SIZE, self.buildings)
+        elif algo == 'ucs':
+            return ucs(start, goal, GRID_SIZE, self.buildings)
+        elif algo == 'gbfs':
+            return gbfs(start, goal, heur, GRID_SIZE, self.buildings)
+        elif algo == 'bidirectional':
+            return bidirectional(start, goal, GRID_SIZE, self.buildings)
+        return algo(start, goal, heur)
 
-        open_set = []
-        heapq.heappush(open_set, (0 + heuristic(start, goal), 0, start, []))
-        visited = set()
-
-        while open_set:
-            est_total, cost, current, path = heapq.heappop(open_set)
-            
-            if current in visited:
-                continue
-                
-            visited.add(current)
-            
-            if current == goal:
-                return path + [current]
-
-            # Explore neighbors (including diagonals)
-            for dx, dy in [(-1,0),(1,0),(0,-1),(0,1), (-1,-1),(-1,1),(1,-1),(1,1)]:
-                nx, ny = current[0]+dx, current[1]+dy
-                
-                # Check boundaries and obstacles
-                if (0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE and 
-                    (nx, ny) not in self.buildings):
-                    
-                    # Diagonal movement costs more
-                    move_cost = 1.4 if dx != 0 and dy != 0 else 1.0
-                    heapq.heappush(
-                        open_set, 
-                        (cost + move_cost + heuristic((nx, ny), goal), 
-                         cost + move_cost, 
-                         (nx, ny), 
-                         path + [current])
-                    )
-
-        return []  # No path found
 
 app = DroneDeliverySim()
 app.run()
