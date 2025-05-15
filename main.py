@@ -17,7 +17,7 @@ heur = sys.argv[3] if len(sys.argv) > 3 else 'manhatten'
 # Constants
 GRID_SIZE = 30
 CELL_SIZE = 1
-NUM_PACKAGES = 6
+NUM_PACKAGES = 12
 FLY_HEIGHT = 3.0
 GROUND_HEIGHT = 0.5
 DRONE_SPEED = 8.0
@@ -301,7 +301,7 @@ class DroneDeliverySim(ShowBase):
             distances.append((dist, pkg))
 
         # Sort by distance and find the closest package that isn't assigned to another drone
-        distances.sort()
+        distances.sort(key=lambda x: x[0])
         for dist, pkg in distances:
             if pkg['assigned_to'] is None:
                 # Assign this package to current drone
