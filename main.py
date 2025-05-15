@@ -6,6 +6,7 @@ import random
 import math
 import sys
 from algos import a_star, bfs, dfs, ucs, gbfs, bidirectional
+from panda3d.core import AmbientLight, DirectionalLight, Vec4
 
 drones = sys.argv[1] if len(sys.argv) > 1 else 1
 algo = sys.argv[2] if len(sys.argv) > 2 else 'a_star'
@@ -14,7 +15,7 @@ heur = sys.argv[3] if len(sys.argv) > 3 else 'manhatten'
 # print(drones, algo, heur)
 
 # Constants
-GRID_SIZE = 30
+GRID_SIZE = 20
 CELL_SIZE = 1
 NUM_PACKAGES = 8 # can be taken as an argument too
 FLY_HEIGHT = 3.0
@@ -29,6 +30,7 @@ class DroneDeliverySim(ShowBase):
         self.disableMouse()
 
         # Game state
+        
         self.grid = [[0 for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
         self.buildings = set()
         self.packages = []
@@ -49,35 +51,36 @@ class DroneDeliverySim(ShowBase):
 
     def setup_world(self):
         """Initialize the 3D world environment"""
+        ground_tex = self.loader.loadTexture("textures/ground.png")
+        package_tex = self.loader.loadTexture("textures/package.png")
+        building_tex = self.loader.loadTexture("textures/building.png")
+        
         # Ground with grid pattern
         for x in range(GRID_SIZE):
             for y in range(GRID_SIZE):
-                tile = self.loader.loadModel("models/box")
+                tile = self.loader.loadModel("models/box.egg")
                 tile.setScale(0.95, 0.95, 0.05)
                 tile.setPos(x, y, -0.05)
                 # Alternate colors for grid pattern
-                if (x + y) % 2 == 0:
-                    tile.setColor(0.95, 0.95, 1.0, 1)  # Light blue
-                else:
-                    tile.setColor(0.85, 0.85, 0.95, 1)  # Slightly darker
+                tile.setTexture(ground_tex)  
                 tile.reparentTo(self.render)
 
         # Buildings with varying heights
-        building_colors = [
-            (0.6, 0.6, 0.7, 1),  # Gray-blue
-            (0.7, 0.7, 0.8, 1),   # Lighter gray-blue
-            (0.5, 0.6, 0.6, 1)    # Blue-gray
-        ]
+        # building_colors = [
+        #     (0.6, 0.6, 0.7, 1),  # Gray-blue
+        #     (0.7, 0.7, 0.8, 1),   # Lighter gray-blue
+        #     (0.5, 0.6, 0.6, 1)    # Blue-gray
+        # ]
         
         # Generate buildings
         for x in range(0, GRID_SIZE, 3):
             for y in range(0, GRID_SIZE, 3):
-                if random.random() < 0.5:  # 50% chance of building
+                if random.random() < 0.4:  # 50% chance of building
                     height = random.uniform(1.5, 4.0)
                     building = self.loader.loadModel("models/box")
                     building.setScale(0.9, 0.9, height)
-                    building.setPos(x + 0.5, y + 0.5, 0)
-                    building.setColor(random.choice(building_colors))
+                    building.setPos(x + 0.5, y + 0.5, height)
+                    building.setTexture(building_tex)
                     building.reparentTo(self.render)
                     self.buildings.add((x, y))
                     for dx in range(-1, 1):
@@ -87,17 +90,17 @@ class DroneDeliverySim(ShowBase):
                                 self.building_obstacles.add((nx, ny))
                     
                     # Add windows
-                    if random.random() > 0.2:
-                        for _ in range(int(height)):
-                            window = self.loader.loadModel("models/box")
-                            window.setScale(0.2, 0.05, 0.2)
-                            window.setColor(0.9, 0.9, 0.7, 1)
-                            window.setPos(
-                                random.uniform(-0.3, 0.3),
-                                random.uniform(-0.3, 0.3),
-                                random.uniform(-height/2 + 0.5, height/2 - 0.5)
-                            )
-                            window.reparentTo(building)
+                    # if random.random() > 0.2:
+                    #     for _ in range(int(height)):
+                    #         window = self.loader.loadModel("models/box")
+                    #         window.setScale(0.2, 0.05, 0.2)
+                    #         window.setColor(0.9, 0.9, 0.7, 1)
+                    #         window.setPos(
+                    #             random.uniform(-0.3, 0.3),
+                    #             random.uniform(-0.3, 0.3),
+                    #             random.uniform(-height/2 + 0.5, height/2 - 0.5)
+                    #         )
+                    #         window.reparentTo(building)
 
         # Generate all valid non-building positions
         valid_positions = []
@@ -122,11 +125,7 @@ class DroneDeliverySim(ShowBase):
             # Create pickup point
             pickup = self.loader.loadModel("models/box")
             pickup.setScale(0.4, 0.4, 0.2)
-            pickup.setColor(random.choice([
-                (0.1, 0.4, 1, 1),   # Blue
-                (1, 0.2, 0.2, 1),   # Red
-                (0.8, 0.8, 0, 1)    # Yellow
-            ]))
+            pickup.setTexture(package_tex)
             pickup.setPos(start_pos[0] + 0.5, start_pos[1] + 0.5, 0.2)
             pickup.reparentTo(self.render)
 
@@ -194,8 +193,14 @@ class DroneDeliverySim(ShowBase):
             self.taskMgr.add(lambda task, i=i: self.update_battery(task, i), f"update_battery_{i}")
 
         # Camera setup (now follows first drone)
-        self.camera.setPos(GRID_SIZE / 2, -GRID_SIZE * 1.2, GRID_SIZE * 0.8)
-        self.camera.lookAt(GRID_SIZE / 2, GRID_SIZE / 2, 0)
+        # self.camera.setPos(GRID_SIZE / 2, -GRID_SIZE * 1.2, GRID_SIZE * 0.8)
+        # self.camera.lookAt(GRID_SIZE / 2, GRID_SIZE / 2, 0)
+
+        # Position camera directly above the center of the grid
+        self.camera.setPos(GRID_SIZE / 2, 0, GRID_SIZE * 2.5)
+
+        # Look straight down along -Z axis
+        self.camera.setHpr(0, -80, 0)
 
         # Lighting
         ambient = AmbientLight("ambient")
@@ -205,7 +210,7 @@ class DroneDeliverySim(ShowBase):
         directional = DirectionalLight("dir")
         directional.setColor((0.9, 0.9, 0.8, 1))
         directional_np = self.render.attachNewNode(directional)
-        directional_np.setHpr(45, -60, 0)
+        directional_np.setHpr(45, 120, 0)
         self.render.setLight(directional_np)
 
     def setup_ui(self):
