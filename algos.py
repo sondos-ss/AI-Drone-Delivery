@@ -2,7 +2,7 @@ import heapq
 from collections import deque
 from heuristics import get_heuristic
 
-dirs = [(-1,0),(1,0),(0,-1),(0,1)]
+dirs = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
 
 def a_star(start, goal, heur, GRID_SIZE, buildings):
         """A* pathfinding algorithm"""
