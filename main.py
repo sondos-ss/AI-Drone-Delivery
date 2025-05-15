@@ -360,7 +360,7 @@ class DroneDeliverySim(ShowBase):
             if not drone['current_path']:
                 drone['current_package'] = None
                 drone['current_path'] = []                    
-                drone['current_path'] = self.path_gen(algo, self.get_grid_pos(d), d['original-pos'], heur)
+                drone['current_path'] = self.path_gen(algo, self.get_grid_pos(drone), drone['original-pos'], heur)
 
         elif pkg['picked'] and not pkg['delivered'] and drone_pos == pkg['goal']:
             # Deliver package
