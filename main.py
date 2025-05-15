@@ -3,7 +3,6 @@ from panda3d.core import *
 from direct.task import Task
 from direct.gui.OnscreenText import OnscreenText
 import random
-import heapq
 import math
 import sys
 from algos import a_star, bfs, dfs, ucs, gbfs, bidirectional
@@ -17,10 +16,10 @@ heur = sys.argv[3] if len(sys.argv) > 3 else 'manhatten'
 # Constants
 GRID_SIZE = 30
 CELL_SIZE = 1
-NUM_PACKAGES = 12
+NUM_PACKAGES = 8 # can be taken as an argument too
 FLY_HEIGHT = 3.0
 GROUND_HEIGHT = 0.5
-DRONE_SPEED = 8.0
+DRONE_SPEED = 9.0
 BATTERY_CAPACITY = 100.0
 NUM_DRONES = int(drones)  # Number of drones to simulate
 
@@ -77,7 +76,7 @@ class DroneDeliverySim(ShowBase):
                     height = random.uniform(1.5, 4.0)
                     building = self.loader.loadModel("models/box")
                     building.setScale(0.9, 0.9, height)
-                    building.setPos(x + 0.5, y + 0.5, height/2)
+                    building.setPos(x + 0.5, y + 0.5, 0)
                     building.setColor(random.choice(building_colors))
                     building.reparentTo(self.render)
                     self.buildings.add((x, y))
@@ -172,7 +171,8 @@ class DroneDeliverySim(ShowBase):
                 'path_index': 0,
                 'battery': BATTERY_CAPACITY,
                 'rotor_angle': 0,
-                'id': i
+                'id': i,
+                'original-pos': (i*2, 0)
             }
             
             drone['model'].setScale(0.5, 0.5, 0.2)
@@ -283,14 +283,15 @@ class DroneDeliverySim(ShowBase):
                 drone['current_path'] = self.path_gen(algo, self.get_grid_pos(), pkg['start'], heur)
                 drone['path_index'] = 0
                 if not drone['current_path']:
-                    print(f"Drone {drone['id']}: No path to delivery point found!")
                     drone['current_package'] = None
-                    drone['current_path'] = []
+                    drone['current_path'] = self.path_gen(algo, self.get_grid_pos(drone), drone['original-pos'], heur)
                 return
 
         # Find the nearest unassigned package
         unassigned_pkgs = [pkg for pkg in self.packages if not pkg['picked'] and pkg['assigned_to'] is None]
         if not unassigned_pkgs:
+            drone['current_package'] = None
+            drone['current_path'] = self.path_gen(algo, self.get_grid_pos(drone), drone['original-pos'], heur)
             return
 
         # Calculate distances from drone to each package
@@ -311,10 +312,9 @@ class DroneDeliverySim(ShowBase):
                 # drone['current_path'] = self.a_star(drone_pos, pkg['start'])                
                 drone['path_index'] = 0
                 if not drone['current_path']:
-                    print(f"Drone {drone['id']}: No path to package found!")
                     drone['current_package'] = None
-                    drone['current_path'] = []
                     pkg['assigned_to'] = None
+                    drone['current_path'] = self.path_gen(algo, self.get_grid_pos(drone), drone['original-pos'], heur)
                 break
 
     def follow_path(self, drone, dt):
@@ -358,9 +358,9 @@ class DroneDeliverySim(ShowBase):
             drone['current_path'] = self.path_gen(algo, drone_pos, pkg['goal'], heur)
             drone['path_index'] = 0
             if not drone['current_path']:
-                print(f"Drone {drone['id']}: No path to delivery point!")
                 drone['current_package'] = None
-                drone['current_path'] = []
+                drone['current_path'] = []                    
+                drone['current_path'] = self.path_gen(algo, self.get_grid_pos(d), d['original-pos'], heur)
 
         elif pkg['picked'] and not pkg['delivered'] and drone_pos == pkg['goal']:
             # Deliver package
@@ -384,6 +384,9 @@ class DroneDeliverySim(ShowBase):
             # Check if all packages delivered
             if self.delivered_count == NUM_PACKAGES:
                 print("🎉 All packages delivered! Mission complete!")
+                # for d in self.drones:
+                #     d['current_package'] = None
+                #     d['current_path'] = self.path_gen(algo, self.get_grid_pos(d), d['original-pos'], heur)
             else:
                 # Immediately look for next package
                 self.find_next_package(drone)
