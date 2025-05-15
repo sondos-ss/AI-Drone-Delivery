@@ -17,12 +17,12 @@ heur = sys.argv[3] if len(sys.argv) > 3 else 'manhatten'
 # Constants
 GRID_SIZE = 30
 CELL_SIZE = 1
-NUM_PACKAGES = 5
+NUM_PACKAGES = 6
 FLY_HEIGHT = 3.0
 GROUND_HEIGHT = 0.5
 DRONE_SPEED = 8.0
 BATTERY_CAPACITY = 100.0
-NUM_DRONES = 3  # Number of drones to simulate
+NUM_DRONES = int(drones)  # Number of drones to simulate
 
 class DroneDeliverySim(ShowBase):
     def __init__(self):
@@ -307,7 +307,8 @@ class DroneDeliverySim(ShowBase):
                 # Assign this package to current drone
                 pkg['assigned_to'] = drone['id']
                 drone['current_package'] = pkg
-                drone['current_path'] = self.current_path = self.path_gen(algo, self.get_grid_pos(), pkg['goal'], heur)
+                drone['current_path'] = self.path_gen(algo, drone_pos, pkg['start'], heur)
+                # drone['current_path'] = self.a_star(drone_pos, pkg['start'])                
                 drone['path_index'] = 0
                 if not drone['current_path']:
                     print(f"Drone {drone['id']}: No path to package found!")
@@ -433,43 +434,6 @@ class DroneDeliverySim(ShowBase):
         elif algo == 'bidirectional':
             return bidirectional(start, goal, GRID_SIZE, self.buildings)
         return algo(start, goal, heur)
-
-    def a_star(self, start, goal):
-        """A* pathfinding algorithm"""
-        def heuristic(a, b):
-            return abs(a[0]-b[0]) + abs(a[1]-b[1])
-
-        open_set = []
-        heapq.heappush(open_set, (0 + heuristic(start, goal), 0, start, []))
-        visited = set()
-
-        while open_set:
-            est_total, cost, current, path = heapq.heappop(open_set)
-            
-            if current in visited:
-                continue
-                
-            visited.add(current)
-            
-            if current == goal:
-                return path + [current]
-
-            for dx, dy in [(-1,0),(1,0),(0,-1),(0,1), (-1,-1),(-1,1),(1,-1),(1,1)]:
-                nx, ny = current[0]+dx, current[1]+dy
-                
-                if (0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE and 
-                    (nx, ny) not in self.buildings):
-                    
-                    move_cost = 1.4 if dx != 0 and dy != 0 else 1.0
-                    heapq.heappush(
-                        open_set, 
-                        (cost + move_cost + heuristic((nx, ny), goal), 
-                         cost + move_cost, 
-                         (nx, ny), 
-                         path + [current])
-                    )
-
-        return []  # No path found
 
 app = DroneDeliverySim()
 app.run()
